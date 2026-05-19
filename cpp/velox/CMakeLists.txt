@@ -182,6 +182,7 @@ set(VELOX_SRCS
     operators/writer/VeloxColumnarBatchWriter.cc
     operators/writer/VeloxParquetDataSource.cc
     shuffle/ArrowShuffleDictionaryWriter.cc
+    shuffle/ShuffleProfileSink.cc
     shuffle/VeloxHashShuffleWriter.cc
     shuffle/VeloxRssSortShuffleWriter.cc
     shuffle/VeloxShuffleReader.cc

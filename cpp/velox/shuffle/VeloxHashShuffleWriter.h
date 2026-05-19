@@ -436,6 +436,11 @@ class VeloxHashShuffleWriter : public VeloxShuffleWriter {
   std::optional<uint32_t> partitionBufferInUse_{std::nullopt};
 
   std::vector<std::unique_ptr<facebook::velox::StreamArena>> arenas_;
+
+  // Profile sink writer id. -1 means "not yet assigned"; lazily set the first
+  // time the profile sink is queried. Only meaningful when the env var
+  // GLUTEN_PROFILE_SHUFFLE is set.
+  int64_t profileWriterId_{-1};
 }; // class VeloxHashBasedShuffleWriter
 
 } // namespace gluten

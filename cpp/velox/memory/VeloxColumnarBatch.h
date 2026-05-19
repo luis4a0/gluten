@@ -65,6 +65,11 @@ class VeloxColumnarBatch final : public ColumnarBatch {
   facebook::velox::RowVectorPtr rowVector_ = nullptr;
   bool flattened_ = false;
 
+  // Profile sink state. Lazily assigned on first ensureFlattened() call when
+  // GLUTEN_PROFILE_SHUFFLE is set. -1 means "not yet assigned".
+  int64_t profileWriterId_{-1};
+  int64_t batchIdx_{0};
+
   inline static const std::string kType{"velox"};
 };
 

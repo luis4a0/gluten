@@ -16,6 +16,7 @@
  */
 #include "VeloxColumnarBatch.h"
 #include "compute/VeloxRuntime.h"
+#include "shuffle/ShuffleProfileSink.h"
 #include "utils/Timer.h"
 #include "utils/VeloxArrowUtils.h"
 #include "velox/row/UnsafeRowFast.h"
@@ -48,6 +49,97 @@ RowVectorPtr makeRowVector(
 void VeloxColumnarBatch::ensureFlattened() {
   if (flattened_) {
     return;
+  }
+  // Profile sink: capture per-batch encoding survey BEFORE flattening
+  // collapses dict/const/lazy back to flat. No-op when env unset.
+  auto& sink = ShuffleProfileSink::instance();
+  if (sink.enabled()) {
+    if (profileWriterId_ < 0) {
+      profileWriterId_ = sink.newWriterId();
+    }
+    ShuffleProfileSink::BatchSurvey survey;
+    survey.n_rows = rowVector_->size();
+    survey.n_cols = static_cast<int32_t>(rowVector_->children().size());
+    for (const auto& child : rowVector_->children()) {
+      if (child == nullptr) {
+        ++survey.n_other_enc;
+        ++survey.n_other_type;
+        continue;
+      }
+      switch (child->encoding()) {
+        case VectorEncoding::Simple::FLAT:
+          ++survey.n_flat;
+          break;
+        case VectorEncoding::Simple::DICTIONARY:
+          ++survey.n_dict;
+          break;
+        case VectorEncoding::Simple::CONSTANT:
+          ++survey.n_const;
+          break;
+        case VectorEncoding::Simple::LAZY:
+          ++survey.n_lazy;
+          break;
+        default:
+          ++survey.n_other_enc;
+          break;
+      }
+      switch (child->typeKind()) {
+        case TypeKind::BIGINT:
+          ++survey.n_bigint;
+          break;
+        case TypeKind::INTEGER:
+          ++survey.n_int32;
+          break;
+        case TypeKind::SMALLINT:
+          ++survey.n_int16;
+          break;
+        case TypeKind::TINYINT:
+          ++survey.n_int8;
+          break;
+        case TypeKind::REAL:
+          ++survey.n_real;
+          break;
+        case TypeKind::DOUBLE:
+          ++survey.n_double;
+          break;
+        case TypeKind::HUGEINT:
+          // Velox uses HUGEINT (int128) for long decimals.
+          ++survey.n_decimal;
+          break;
+        case TypeKind::VARCHAR:
+          ++survey.n_varchar;
+          break;
+        case TypeKind::VARBINARY:
+          ++survey.n_varbinary;
+          break;
+        case TypeKind::TIMESTAMP:
+          ++survey.n_timestamp;
+          break;
+        case TypeKind::BOOLEAN:
+          ++survey.n_bool;
+          break;
+        case TypeKind::ROW:
+        case TypeKind::ARRAY:
+        case TypeKind::MAP:
+          ++survey.n_complex;
+          break;
+        default:
+          ++survey.n_other_type;
+          break;
+      }
+      // Reclassify short decimals (which surface as BIGINT physically).
+      if (child->type()->isShortDecimal()) {
+        --survey.n_bigint;
+        ++survey.n_decimal;
+      }
+      // Reclassify DATE (logical type backed by INTEGER physically).
+      if (child->type()->isDate()) {
+        --survey.n_int32;
+        ++survey.n_date;
+      }
+    }
+    sink.writeBatchSurvey(profileWriterId_, batchIdx_, survey);
+    ++batchIdx_;
   }
   ScopedTimer timer(&exportNanos_);
   for (auto& child : rowVector_->children()) {

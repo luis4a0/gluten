@@ -18,6 +18,7 @@
 #include "shuffle/VeloxHashShuffleWriter.h"
 #include "memory/ArrowMemory.h"
 #include "memory/VeloxColumnarBatch.h"
+#include "shuffle/ShuffleProfileSink.h"
 #include "shuffle/Utils.h"
 #include "shuffle/VeloxTypeAwareCompress.h"
 #include "utils/Common.h"
@@ -360,6 +361,38 @@ arrow::Status VeloxHashShuffleWriter::stop() {
   }
 
   stat();
+
+  // Profile sink hook (no-op when GLUTEN_PROFILE_SHUFFLE unset). Emit one
+  // run_meta row (idempotent), one stage_timer row per CpuWallTiming bucket,
+  // and one byte_breakdown row aggregated from the just-populated metrics_.
+  auto& sink = ShuffleProfileSink::instance();
+  if (sink.enabled()) {
+    if (profileWriterId_ < 0) {
+      profileWriterId_ = sink.newWriterId();
+    }
+    sink.writeRunMeta();
+    for (int i = CpuWallTimingBegin; i != CpuWallTimingEnd; ++i) {
+      const auto& t = cpuWallTimingList_[i];
+      sink.writeStageTimer(
+          profileWriterId_,
+          CpuWallTimingName(static_cast<CpuWallTimingType>(i)),
+          t.wallNanos,
+          t.cpuNanos,
+          t.count);
+    }
+    ShuffleProfileSink::ByteBreakdown b;
+    for (auto v : metrics_.rawPartitionLengths) {
+      b.bytes_raw += v;
+    }
+    for (auto v : metrics_.partitionLengths) {
+      b.bytes_compressed += v;
+    }
+    b.compress_ns = metrics_.totalCompressTime;
+    b.write_ns = metrics_.totalWriteTime;
+    b.evict_ns = metrics_.totalEvictTime;
+    b.n_partitions = static_cast<int32_t>(numPartitions_);
+    sink.writeByteBreakdown(profileWriterId_, b);
+  }
 
   return arrow::Status::OK();
 }
